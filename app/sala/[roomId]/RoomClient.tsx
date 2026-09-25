@@ -180,13 +180,16 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       channel.bind('client-moderation', (payload: unknown, metadata?: unknown) => {
         const moderation = normalizeModerationEvent(payload);
         if (!moderation || getPusherEventUserId(metadata) !== hostIdRef.current) return;
+        if (moderation.action === 'promote' && !memberJoinTimesRef.current.has(moderation.targetId)) return;
 
         const targetIsLocal = moderation.targetId === localIdRef.current;
         const actionText = moderation.action === 'kick'
           ? `${moderation.targetName} foi removido da sala.`
           : moderation.action === 'mute'
             ? `${moderation.targetName} foi silenciado pelo anfitrião.`
-            : `${moderation.targetName} teve o microfone liberado pelo anfitrião.`;
+            : moderation.action === 'unmute'
+              ? `${moderation.targetName} teve o microfone liberado pelo anfitrião.`
+              : `${moderation.targetName} agora é o anfitrião da sala.`;
 
         if (moderation.action === 'kick' && targetIsLocal) {
           appendSystemChatMessage('Você foi removido da sala pelo anfitrião.');
@@ -200,6 +203,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         appendSystemChatMessage(actionText);
         if (targetIsLocal && moderation.action === 'mute') void applyHostMicState(true);
         if (targetIsLocal && moderation.action === 'unmute') void applyHostMicState(false);
+        if (moderation.action === 'promote') updateHost(moderation.targetId);
       });
 
       const manager = new WebRTCManager(channel, localIdRef.current);
@@ -289,7 +293,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           member.id,
           Number.isFinite(member.info?.joinedAt) ? member.info.joinedAt : Date.now()
         );
-        electHostFromPresence();
+        if (!memberJoinTimesRef.current.has(hostIdRef.current)) electHostFromPresence();
         setParticipants((prev) => {
           const participant = createRemoteParticipant(member.id, memberName);
           return {
@@ -676,15 +680,15 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   }
 
   function handleModerationCommand(text: string): boolean {
-    if (!/^\.(kick|mute|unmute)\b/i.test(text.trim())) return false;
+    if (!/^\.(kick|mute|unmute|promote)\b/i.test(text.trim())) return false;
     if (hostIdRef.current !== localIdRef.current) {
       showCommandFeedback('Só o anfitrião da sala pode usar comandos de moderação.');
       return true;
     }
 
-    const match = /^\.(kick|mute|unmute)\s+@(.+?)\s*$/i.exec(text.trim());
+    const match = /^\.(kick|mute|unmute|promote)\s+@(.+?)\s*$/i.exec(text.trim());
     if (!match) {
-      showCommandFeedback('Formato do comando: .kick @nome, .mute @nome ou .unmute @nome.');
+      showCommandFeedback('Formato do comando: .kick @nome, .mute @nome, .unmute @nome ou .promote @nome.');
       return true;
     }
 
@@ -704,7 +708,13 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
     const target = matches[0];
     if (target.id === hostIdRef.current) {
-      showCommandFeedback('O anfitrião não pode remover ou silenciar a própria conta por comando.');
+      showCommandFeedback(action === 'promote'
+        ? 'Você já é o anfitrião da sala.'
+        : 'O anfitrião não pode remover ou silenciar a própria conta por comando.');
+      return true;
+    }
+    if (action === 'promote' && !memberJoinTimesRef.current.has(target.id)) {
+      showCommandFeedback('Essa pessoa já não está conectada à sala. Atualize a lista e tente novamente.');
       return true;
     }
 
@@ -724,8 +734,11 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         ? `${target.name} foi removido da sala.`
         : action === 'mute'
           ? `${target.name} foi silenciado pelo anfitrião.`
-          : `${target.name} teve o microfone liberado pelo anfitrião.`;
+          : action === 'unmute'
+            ? `${target.name} teve o microfone liberado pelo anfitrião.`
+            : `${target.name} agora é o anfitrião da sala.`;
       appendSystemChatMessage(notice);
+      if (action === 'promote') updateHost(target.id);
     } catch (error) {
       console.error('Não foi possível executar o comando de moderação:', error);
       showCommandFeedback('Não foi possível enviar o comando de moderação. Tente novamente.');
@@ -1073,7 +1086,7 @@ function normalizeModerationEvent(payload: unknown): RoomModerationEvent | null 
   if (!payload || typeof payload !== 'object') return null;
   const candidate = payload as Partial<RoomModerationEvent>;
   if (
-    candidate.action !== 'kick' && candidate.action !== 'mute' && candidate.action !== 'unmute'
+    candidate.action !== 'kick' && candidate.action !== 'mute' && candidate.action !== 'unmute' && candidate.action !== 'promote'
   ) return null;
   if (typeof candidate.targetId !== 'string' || candidate.targetId.length > 100) return null;
   return {
