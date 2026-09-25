@@ -1,4 +1,5 @@
-import { handleUpload, type HandleUploadBody } from '@vercel/blob/client';
+import { issueSignedToken } from '@vercel/blob';
+import { handleUploadPresigned, type HandleUploadPresignedBody } from '@vercel/blob/client';
 import { NextResponse } from 'next/server';
 import Pusher from 'pusher';
 import { verifyRoomSession } from '@/lib/roomSession';
@@ -33,26 +34,29 @@ function parseClientPayload(value: string | null | undefined) {
 }
 
 export async function POST(request: Request) {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return NextResponse.json({ error: 'O armazenamento de imagens ainda não foi configurado na Vercel.' }, { status: 503 });
+  if (!process.env.BLOB_STORE_ID || !process.env.BLOB_WEBHOOK_PUBLIC_KEY) {
+    return NextResponse.json(
+      { error: 'Conecte o armazenamento Blob ao projeto Vercel nos ambientes Production e Preview.' },
+      { status: 503 }
+    );
   }
   const pusher = getPusherServer();
   if (!pusher) {
     return NextResponse.json({ error: 'A configuração do Pusher está incompleta.' }, { status: 503 });
   }
 
-  let body: HandleUploadBody;
+  let body: HandleUploadPresignedBody;
   try {
-    body = (await request.json()) as HandleUploadBody;
+    body = (await request.json()) as HandleUploadPresignedBody;
   } catch {
     return NextResponse.json({ error: 'Solicitação de envio inválida.' }, { status: 400 });
   }
 
   try {
-    const response = await handleUpload({
+    const response = await handleUploadPresigned({
       body,
       request,
-      onBeforeGenerateToken: async (pathname, clientPayload) => {
+      getSignedToken: async (pathname, clientPayload) => {
         const identity = parseClientPayload(clientPayload);
         if (
           !identity ||
@@ -71,11 +75,23 @@ export async function POST(request: Request) {
           throw new Error('Entre na sala antes de enviar uma imagem.');
         }
 
-        return {
-          addRandomSuffix: true,
+        const validUntil = Date.now() + 10 * 60 * 1000;
+        const token = await issueSignedToken({
+          pathname,
+          operations: ['put'],
           allowedContentTypes: ALLOWED_IMAGE_TYPES,
           maximumSizeInBytes: MAX_IMAGE_SIZE,
-          tokenPayload: JSON.stringify(identity),
+          validUntil,
+        });
+
+        return {
+          token,
+          urlOptions: {
+            allowedContentTypes: ALLOWED_IMAGE_TYPES,
+            maximumSizeInBytes: MAX_IMAGE_SIZE,
+            validUntil,
+            tokenPayload: JSON.stringify(identity),
+          },
         };
       },
       onUploadCompleted: async () => {},
