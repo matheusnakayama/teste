@@ -12,6 +12,8 @@ type MediaStateHandler = (peerId: string, state: { micOn: boolean; camOn: boolea
 export interface VideoSenderProfile {
   maxBitrate: number;
   maxFramerate: number;
+  width?: number;
+  height?: number;
   /** Limite total desejado antes de dividir cópias entre os participantes. */
   totalBitrate?: number;
 }
@@ -33,6 +35,13 @@ interface PeerEntry {
   offerRetryTimer?: number;
   offerRetryAttempts: number;
   videoProfileReady?: Promise<void>;
+  videoSender?: RTCRtpSender;
+  videoProfile?: VideoSenderProfile | null;
+  targetVideoBitrate?: number;
+  currentVideoBitrate?: number;
+  videoBitrateTimer?: number;
+  readingVideoStats?: boolean;
+  videoParametersChain: Promise<void>;
   retryNegotiation?: () => void;
 }
 
@@ -136,6 +145,7 @@ export class WebRTCManager {
       if (entry.restartTimer !== undefined) window.clearTimeout(entry.restartTimer);
       if (entry.initialCallFallbackTimer !== undefined) window.clearTimeout(entry.initialCallFallbackTimer);
       if (entry.offerRetryTimer !== undefined) window.clearTimeout(entry.offerRetryTimer);
+      if (entry.videoBitrateTimer !== undefined) window.clearInterval(entry.videoBitrateTimer);
       if (entry.retryNegotiation) {
         entry.connection.removeEventListener('signalingstatechange', entry.retryNegotiation);
         entry.connection.removeEventListener('connectionstatechange', entry.retryNegotiation);
@@ -171,13 +181,14 @@ export class WebRTCManager {
       this.videoTrackOverride = track;
       this.videoProfileOverride = profile;
 
-      for (const { connection } of this.peers.values()) {
+      for (const peer of this.peers.values()) {
+        const { connection } = peer;
         if (connection.signalingState === 'closed') continue;
         let sender = connection.getSenders().find((s) => s.track?.kind === 'video');
         sender ??= connection.getTransceivers().find((t) => t.receiver.track.kind === 'video')?.sender;
         if (!sender) sender = connection.addTransceiver('video', { direction: 'sendrecv' }).sender;
         await sender.replaceTrack(track);
-        await this.configureVideoSender(sender, this.profileForCurrentPeerCount(profile));
+        await this.configureVideoSender(sender, this.profileForCurrentPeerCount(profile), peer);
       }
     });
     this.videoReplaceChain = update.catch(() => {});
@@ -221,6 +232,7 @@ export class WebRTCManager {
       iceRestartQueued: false,
       restartAttempts: 0,
       offerRetryAttempts: 0,
+      videoParametersChain: Promise.resolve(),
     };
     this.peers.set(peerId, peer);
 
@@ -255,7 +267,8 @@ export class WebRTCManager {
     if (outgoingVideoSender && this.videoProfileOverride) {
       peer.videoProfileReady = this.configureVideoSender(
         outgoingVideoSender,
-        this.profileForCurrentPeerCount(this.videoProfileOverride)
+        this.profileForCurrentPeerCount(this.videoProfileOverride),
+        peer
       );
     }
 
@@ -265,7 +278,7 @@ export class WebRTCManager {
       for (const existingPeer of this.peers.values()) {
         if (existingPeer === peer) continue;
         const sender = existingPeer.connection.getSenders().find((candidate) => candidate.track?.kind === 'video');
-        if (sender) void this.configureVideoSender(sender, this.profileForCurrentPeerCount(this.videoProfileOverride));
+        if (sender) void this.configureVideoSender(sender, this.profileForCurrentPeerCount(this.videoProfileOverride), existingPeer);
       }
     }
 
@@ -315,7 +328,7 @@ export class WebRTCManager {
       }
       if (pc.connectionState === 'connected' && this.videoProfileOverride) {
         const sender = pc.getSenders().find((candidate) => candidate.track?.kind === 'video');
-        if (sender) void this.configureVideoSender(sender, this.profileForCurrentPeerCount(this.videoProfileOverride));
+        if (sender) void this.configureVideoSender(sender, this.profileForCurrentPeerCount(this.videoProfileOverride), peer);
       }
       if (pc.connectionState === 'failed') {
         this.scheduleIceRestart(peerId, peer, 800, true);
@@ -521,28 +534,121 @@ export class WebRTCManager {
     this.channel.trigger('client-signal', payload);
   }
 
-  private async configureVideoSender(sender: RTCRtpSender, profile: VideoSenderProfile | null) {
-    try {
-      const parameters = sender.getParameters();
-      if (!parameters.encodings.length) return;
-
-      const primary = { ...parameters.encodings[0] };
-      if (profile) {
-        primary.maxBitrate = profile.maxBitrate;
-        primary.maxFramerate = profile.maxFramerate;
-        // Sob congestionamento, prioriza manter os quadros fluidos e reduz
-        // a resolução antes de deixar a apresentação engasgar.
-        parameters.degradationPreference = 'maintain-framerate';
-      } else {
-        delete primary.maxBitrate;
-        delete primary.maxFramerate;
-        parameters.degradationPreference = 'balanced';
+  private configureVideoSender(
+    sender: RTCRtpSender,
+    profile: VideoSenderProfile | null,
+    peer?: PeerEntry,
+    bitrate = profile?.maxBitrate
+  ) {
+    if (peer) {
+      peer.videoSender = sender;
+      peer.videoProfile = profile;
+      peer.targetVideoBitrate = profile?.maxBitrate;
+      peer.currentVideoBitrate = profile?.maxBitrate;
+      if (profile) this.startVideoBitrateMonitor(peer);
+      else if (peer.videoBitrateTimer !== undefined) {
+        window.clearInterval(peer.videoBitrateTimer);
+        peer.videoBitrateTimer = undefined;
       }
-      parameters.encodings[0] = primary;
-      await sender.setParameters(parameters);
-    } catch (error) {
-      // A captura ainda é enviada se o navegador não permitir definir bitrate.
-      console.warn('Não foi possível ajustar o bitrate da apresentação:', error);
+    }
+
+    const apply = async () => {
+      try {
+        const parameters = sender.getParameters();
+        if (!parameters.encodings.length) return;
+
+        const primary = { ...parameters.encodings[0] };
+        if (profile) {
+          primary.maxBitrate = bitrate;
+          primary.maxFramerate = profile.maxFramerate;
+          const source = sender.track?.getSettings();
+          if (source?.width && source.height && profile.width && profile.height) {
+            // Alguns navegadores capturam a tela na resolução nativa mesmo
+            // quando applyConstraints não consegue reduzi-la. Limite também
+            // a resolução codificada no sender para respeitar a opção escolhida.
+            const scale = Math.max(source.width / profile.width, source.height / profile.height, 1);
+            if (scale > 1.01) primary.scaleResolutionDownBy = scale;
+            else delete primary.scaleResolutionDownBy;
+          }
+          // Sob congestionamento, prioriza manter os quadros fluidos e reduz
+          // a resolução antes de deixar a apresentação engasgar.
+          parameters.degradationPreference = 'maintain-framerate';
+        } else {
+          delete primary.maxBitrate;
+          delete primary.maxFramerate;
+          delete primary.scaleResolutionDownBy;
+          parameters.degradationPreference = 'balanced';
+        }
+        parameters.encodings[0] = primary;
+        await sender.setParameters(parameters);
+      } catch (error) {
+        // A captura ainda é enviada se o navegador não permitir definir bitrate.
+        console.warn('Não foi possível ajustar o bitrate da apresentação:', error);
+      }
+    };
+
+    if (!peer) return apply();
+    // Serializa atualizações de perfil e as adaptações de rede do mesmo sender.
+    const update = peer.videoParametersChain.then(apply);
+    peer.videoParametersChain = update.catch(() => {});
+    return update;
+  }
+
+  private startVideoBitrateMonitor(peer: PeerEntry) {
+    if (peer.videoBitrateTimer !== undefined) return;
+    peer.videoBitrateTimer = window.setInterval(() => {
+      void this.adaptVideoBitrate(peer);
+    }, 2_500);
+  }
+
+  private async adaptVideoBitrate(peer: PeerEntry) {
+    const { connection, videoSender, videoProfile, targetVideoBitrate } = peer;
+    if (
+      peer.readingVideoStats || !videoSender || !videoProfile || !targetVideoBitrate ||
+      connection.connectionState !== 'connected' || videoSender.track?.readyState !== 'live'
+    ) return;
+
+    peer.readingVideoStats = true;
+    try {
+      const report = await videoSender.getStats();
+      // A pessoa pode ter parado ou reiniciado a apresentação enquanto as
+      // estatísticas eram consultadas; não aplique um perfil antigo à câmera.
+      if (peer.videoProfile !== videoProfile || peer.videoSender !== videoSender) return;
+      type OutgoingNetworkStat = RTCStats & {
+        availableOutgoingBitrate?: number;
+        selectedCandidatePairId?: string;
+        selected?: boolean;
+        nominated?: boolean;
+        writable?: boolean;
+        state?: string;
+      };
+      const stats = Array.from(report.values()) as OutgoingNetworkStat[];
+      const transport = stats.find((stat) => stat.type === 'transport' && stat.selectedCandidatePairId);
+      const pair = (transport?.selectedCandidatePairId
+        ? report.get(transport.selectedCandidatePairId) as OutgoingNetworkStat | undefined
+        : undefined) ?? stats.find((stat) => stat.type === 'candidate-pair' && stat.selected)
+        ?? stats.find((stat) => stat.type === 'candidate-pair' && stat.state === 'succeeded' && stat.nominated && stat.writable);
+      const availableBitrate = pair?.availableOutgoingBitrate;
+      if (!availableBitrate || !Number.isFinite(availableBitrate)) return;
+
+      // Reserve margem para áudio, sinalização e variações rápidas da rede.
+      const networkLimit = Math.max(150_000, Math.floor(availableBitrate * 0.78));
+      const desiredBitrate = Math.min(targetVideoBitrate, networkLimit);
+      const currentBitrate = peer.currentVideoBitrate ?? targetVideoBitrate;
+      // Diminui rápido quando há congestionamento e recupera aos poucos para
+      // evitar oscilações visíveis de qualidade.
+      const nextBitrate = desiredBitrate < currentBitrate
+        ? desiredBitrate
+        : Math.min(desiredBitrate, Math.ceil(currentBitrate * 1.3));
+      if (Math.abs(nextBitrate - currentBitrate) < Math.max(50_000, currentBitrate * 0.1)) return;
+
+      await this.configureVideoSender(videoSender, videoProfile, peer, nextBitrate);
+      peer.currentVideoBitrate = nextBitrate;
+    } catch {
+      // Alguns navegadores não expõem a estimativa de banda; o controle de
+      // congestionamento interno do WebRTC continua ativo nesses casos.
+    } finally {
+      peer.readingVideoStats = false;
     }
   }
 
