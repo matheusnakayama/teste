@@ -3,19 +3,32 @@
 import { useEffect, useState } from 'react';
 
 const THEMES = [
-  { id: 'violet', name: 'Roxo', color: '#a855f7', deepColor: '#6b21a8' },
-  { id: 'rose', name: 'Rosa', color: '#f43f5e', deepColor: '#be123c' },
-  { id: 'emerald', name: 'Verde', color: '#10b981', deepColor: '#047857' },
-  { id: 'amber', name: 'Âmbar', color: '#f59e0b', deepColor: '#b45309' },
-  { id: 'cyan', name: 'Ciano', color: '#06b6d4', deepColor: '#0e7490' },
-  { id: 'blue', name: 'Azul', color: '#4657f6', deepColor: '#2c31ad' },
-  { id: 'indigo', name: 'Índigo', color: '#6366f1', deepColor: '#4338ca' },
-  { id: 'orange', name: 'Laranja', color: '#f97316', deepColor: '#c2410c' },
-  { id: 'black', name: 'Preto', color: '#60687a', deepColor: '#17191f' },
+  { id: 'violet', name: 'Roxo', colors: ['#6b21a8', '#a855f7', '#c084fc', '#e9d5ff'] },
+  { id: 'rose', name: 'Rosa', colors: ['#9f1239', '#f43f5e', '#fb7185', '#fecdd3'] },
+  { id: 'emerald', name: 'Verde', colors: ['#065f46', '#10b981', '#4ade80', '#bbf7d0'] },
+  { id: 'amber', name: 'Âmbar', colors: ['#92400e', '#f59e0b', '#fbbf24', '#fde68a'] },
+  { id: 'cyan', name: 'Ciano', colors: ['#155e75', '#06b6d4', '#22d3ee', '#a5f3fc'] },
+  { id: 'blue', name: 'Azul', colors: ['#2c31ad', '#4657f6', '#818cf8', '#c7d2fe'] },
+  { id: 'indigo', name: 'Índigo', colors: ['#3730a3', '#6366f1', '#a5b4fc', '#c7d2fe'] },
+  { id: 'orange', name: 'Laranja', colors: ['#9a3412', '#f97316', '#fb923c', '#fed7aa'] },
+  { id: 'black', name: 'Nigga', colors: ['#111827', '#475569', '#94a3b8', '#cbd5e1'] },
+  { id: 'mint', name: 'Menta', colors: ['#0f766e', '#2dd4bf', '#5eead4', '#ccfbf1'] },
+  { id: 'sunset', name: 'Pôr do sol', colors: ['#be123c', '#fb7185', '#fb923c', '#fcd34d'] },
+  { id: 'ocean', name: 'Oceano', colors: ['#1d4ed8', '#0ea5e9', '#22d3ee', '#99f6e4'] },
+  { id: 'candy', name: 'Candy', colors: ['#be185d', '#ec4899', '#d946ef', '#c4b5fd'] },
+  { id: 'graphite', name: 'Grafite', colors: ['#1f2937', '#475569', '#64748b', '#cbd5e1'] },
 ] as const;
 
 type ThemeId = (typeof THEMES)[number]['id'];
 const STORAGE_KEY = 'videochamada-theme';
+
+function applyTheme(themeId: ThemeId) {
+  const option = THEMES.find((candidate) => candidate.id === themeId) ?? THEMES[0];
+  document.documentElement.dataset.theme = themeId;
+  option.colors.forEach((color, index) => {
+    document.documentElement.style.setProperty(`--theme-gradient-${index + 1}`, color);
+  });
+}
 
 export default function ThemePicker() {
   const [theme, setTheme] = useState<ThemeId>('violet');
@@ -30,13 +43,13 @@ export default function ThemePicker() {
     }
     const initial = THEMES.some((option) => option.id === saved) ? (saved as ThemeId) : 'violet';
     setTheme(initial);
-    document.documentElement.dataset.theme = initial;
+    applyTheme(initial);
 
     function syncTheme(event: StorageEvent) {
       if (event.key !== STORAGE_KEY || !THEMES.some((option) => option.id === event.newValue)) return;
       const next = event.newValue as ThemeId;
       setTheme(next);
-      document.documentElement.dataset.theme = next;
+      applyTheme(next);
     }
 
     window.addEventListener('storage', syncTheme);
@@ -45,7 +58,7 @@ export default function ThemePicker() {
 
   function chooseTheme(next: ThemeId) {
     setTheme(next);
-    document.documentElement.dataset.theme = next;
+    applyTheme(next);
     try {
       window.localStorage.setItem(STORAGE_KEY, next);
     } catch {
@@ -67,7 +80,7 @@ export default function ThemePicker() {
       >
         <span
           className="h-4 w-4 rounded-full ring-2 ring-white/30"
-          style={{ background: `linear-gradient(135deg, ${selected.color}, ${selected.deepColor})` }}
+          style={{ background: `linear-gradient(135deg, ${selected.colors.join(', ')})` }}
         />
         <span className="hidden sm:inline">Tema</span>
       </button>
@@ -95,7 +108,7 @@ export default function ThemePicker() {
               >
                 <span
                   className="h-4 w-4 shrink-0 rounded-full"
-                  style={{ background: `linear-gradient(135deg, ${option.color}, ${option.deepColor})` }}
+                  style={{ background: `linear-gradient(135deg, ${option.colors.join(', ')})` }}
                 />
                 {option.name}
               </button>
