@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel } from 'pusher-js';
-import { upload } from '@vercel/blob/client';
+import { uploadPresigned } from '@vercel/blob/client';
 import PreJoin from '@/components/PreJoin';
 import Controls, { type ScreenShareSettings } from '@/components/Controls';
 import ParticipantsGrid from '@/components/ParticipantsGrid';
@@ -750,7 +750,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     if (!localIdRef.current) throw new Error('Entre na sala antes de enviar uma imagem.');
 
     const uniqueName = createChatMessageId();
-    const blob = await upload(`chat/${roomId}/${uniqueName}.${extension}`, file, {
+    const blob = await uploadPresigned(`chat/${roomId}/${uniqueName}.${extension}`, file, {
       access: 'public',
       contentType: file.type,
       handleUploadUrl: '/api/chat-images/upload',
