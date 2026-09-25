@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react';
 import type { RoomChatMessage } from '@/lib/types';
 import { ImageIcon } from './icons';
 
@@ -42,9 +42,7 @@ export default function ChatPanel({
     setDraft('');
   }
 
-  async function handleImageSelection(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    event.target.value = '';
+  async function uploadImageFile(file: File) {
     if (!file) return;
     if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
       setImageError('Escolha uma imagem JPG, PNG, WebP ou GIF.');
@@ -64,6 +62,30 @@ export default function ChatPanel({
     } finally {
       setUploadingImage(false);
     }
+  }
+
+  async function handleImageSelection(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (file) await uploadImageFile(file);
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (uploadingImage) return;
+    const imageItem = Array.from(event.clipboardData.items).find(
+      (item) => item.kind === 'file' && item.type.startsWith('image/')
+    );
+    if (!imageItem) return;
+
+    const file = imageItem.getAsFile();
+    if (!file) {
+      event.preventDefault();
+      setImageError('Não consegui ler a imagem da área de transferência. Tente salvá-la e usar o botão de imagem.');
+      return;
+    }
+
+    event.preventDefault();
+    void uploadImageFile(file);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -167,6 +189,7 @@ export default function ChatPanel({
             value={draft}
             onChange={(event) => setDraft(event.target.value.slice(0, 500))}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             maxLength={500}
             rows={2}
             placeholder="Escreva uma mensagem…"
@@ -192,7 +215,7 @@ export default function ChatPanel({
               >
                 {uploadingImage ? <span className="text-[10px]">…</span> : <ImageIcon />}
               </button>
-              <span className="text-[10px] text-white/35">{uploadingImage ? 'Enviando imagem…' : 'Enter envia · Shift+Enter pula linha'}</span>
+              <span className="text-[10px] text-white/35">{uploadingImage ? 'Enviando imagem…' : 'Enter envia · Shift+Enter pula linha · Ctrl+V cola imagem'}</span>
             </div>
             <button
               type="submit"
