@@ -939,7 +939,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         />
         {sharingScreen && screenCaptureInfo && (
           <p className="mt-2 text-center text-xs text-white/55">
-            Captura desta tela: {screenCaptureInfo}. O envio também depende da conexão.
+            Captura: {screenCaptureInfo}. O envio ajusta a banda para acompanhar sua conexão e manter a apresentação estável.
           </p>
         )}
       </footer>
