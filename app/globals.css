@@ -7,6 +7,10 @@
   --page-bg: 11 13 19;
   --page-glow: 70 87 246;
   --page-glow-alt: 168 85 247;
+  --theme-gradient-1: #6b21a8;
+  --theme-gradient-2: #a855f7;
+  --theme-gradient-3: #c084fc;
+  --theme-gradient-4: #e9d5ff;
   --surface-default: 15 17 23;
   --surface-soft: 22 25 35;
   --surface-card: 28 31 43;
@@ -203,6 +207,106 @@
   --brand-900: 25 29 39;
 }
 
+:root[data-theme='mint'] {
+  --page-bg: 5 18 18;
+  --page-glow: 45 212 191;
+  --page-glow-alt: 153 246 228;
+  --surface-default: 9 27 27;
+  --surface-soft: 14 39 38;
+  --surface-card: 20 51 49;
+  --surface-border: 35 78 74;
+  --brand-50: 240 253 250;
+  --brand-100: 204 251 241;
+  --brand-200: 153 246 228;
+  --brand-300: 94 234 212;
+  --brand-400: 45 212 191;
+  --brand-500: 20 184 166;
+  --brand-600: 13 148 136;
+  --brand-700: 15 118 110;
+  --brand-800: 17 94 89;
+  --brand-900: 19 78 74;
+}
+
+:root[data-theme='sunset'] {
+  --page-bg: 27 10 15;
+  --page-glow: 251 113 133;
+  --page-glow-alt: 253 186 116;
+  --surface-default: 37 15 20;
+  --surface-soft: 51 21 27;
+  --surface-card: 64 27 34;
+  --surface-border: 99 43 51;
+  --brand-50: 255 241 242;
+  --brand-100: 255 228 230;
+  --brand-200: 254 205 211;
+  --brand-300: 253 164 175;
+  --brand-400: 251 113 133;
+  --brand-500: 244 63 94;
+  --brand-600: 225 29 72;
+  --brand-700: 190 18 60;
+  --brand-800: 159 18 57;
+  --brand-900: 136 19 55;
+}
+
+:root[data-theme='ocean'] {
+  --page-bg: 5 15 29;
+  --page-glow: 14 165 233;
+  --page-glow-alt: 45 212 191;
+  --surface-default: 9 23 40;
+  --surface-soft: 14 34 55;
+  --surface-card: 20 45 68;
+  --surface-border: 34 66 94;
+  --brand-50: 240 249 255;
+  --brand-100: 224 242 254;
+  --brand-200: 186 230 253;
+  --brand-300: 125 211 252;
+  --brand-400: 56 189 248;
+  --brand-500: 14 165 233;
+  --brand-600: 2 132 199;
+  --brand-700: 3 105 161;
+  --brand-800: 7 89 133;
+  --brand-900: 12 74 110;
+}
+
+:root[data-theme='candy'] {
+  --page-bg: 24 9 24;
+  --page-glow: 236 72 153;
+  --page-glow-alt: 192 132 252;
+  --surface-default: 34 14 34;
+  --surface-soft: 46 20 47;
+  --surface-card: 59 27 60;
+  --surface-border: 89 45 89;
+  --brand-50: 253 244 255;
+  --brand-100: 250 232 255;
+  --brand-200: 245 208 254;
+  --brand-300: 240 171 252;
+  --brand-400: 232 121 249;
+  --brand-500: 217 70 239;
+  --brand-600: 192 38 211;
+  --brand-700: 162 28 175;
+  --brand-800: 134 25 143;
+  --brand-900: 112 26 117;
+}
+
+:root[data-theme='graphite'] {
+  --page-bg: 8 11 17;
+  --page-glow: 100 116 139;
+  --page-glow-alt: 203 213 225;
+  --surface-default: 13 17 24;
+  --surface-soft: 20 26 35;
+  --surface-card: 29 36 47;
+  --surface-border: 49 59 73;
+  --brand-50: 248 250 252;
+  --brand-100: 241 245 249;
+  --brand-200: 226 232 240;
+  --brand-300: 203 213 225;
+  --brand-400: 148 163 184;
+  --brand-500: 100 116 139;
+  --brand-600: 71 85 105;
+  --brand-700: 51 65 85;
+  --brand-800: 30 41 59;
+  --brand-900: 15 23 42;
+}
+
 html,
 body {
   height: 100%;
@@ -210,8 +314,10 @@ body {
 
 body {
   background:
-    radial-gradient(ellipse at 12% 8%, rgb(var(--page-glow) / 0.24), transparent 40%),
-    radial-gradient(ellipse at 88% 82%, rgb(var(--page-glow-alt) / 0.13), transparent 46%),
+    radial-gradient(ellipse at 12% 8%, color-mix(in srgb, var(--theme-gradient-1) 24%, transparent), transparent 40%),
+    radial-gradient(ellipse at 88% 18%, color-mix(in srgb, var(--theme-gradient-2) 18%, transparent), transparent 42%),
+    radial-gradient(ellipse at 86% 84%, color-mix(in srgb, var(--theme-gradient-3) 15%, transparent), transparent 46%),
+    radial-gradient(ellipse at 10% 88%, color-mix(in srgb, var(--theme-gradient-4) 12%, transparent), transparent 42%),
     linear-gradient(135deg, rgb(var(--page-bg)), rgb(var(--surface-default)) 56%, rgb(var(--page-bg)));
   background-attachment: fixed;
   color: #eef0f6;
