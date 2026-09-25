@@ -27,12 +27,19 @@ export default function ChatPanel({
   const [draft, setDraft] = useState('');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
+  const [pendingImage, setPendingImage] = useState<{ file: File; previewUrl: string } | null>(null);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
+
+  useEffect(() => {
+    return () => {
+      if (pendingImage) URL.revokeObjectURL(pendingImage.previewUrl);
+    };
+  }, [pendingImage]);
 
   function sendMessage(event?: FormEvent) {
     event?.preventDefault();
@@ -42,7 +49,7 @@ export default function ChatPanel({
     setDraft('');
   }
 
-  async function uploadImageFile(file: File) {
+  function prepareImage(file: File) {
     if (!file) return;
     if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
       setImageError('Escolha uma imagem JPG, PNG, WebP ou GIF.');
@@ -54,20 +61,37 @@ export default function ChatPanel({
     }
 
     setImageError(null);
+    setPendingImage({ file, previewUrl: URL.createObjectURL(file) });
+  }
+
+  async function uploadImageFile(file: File): Promise<boolean> {
     setUploadingImage(true);
     try {
       await onSendImage(file);
+      return true;
     } catch (error) {
       setImageError(error instanceof Error ? error.message : 'Não foi possível enviar a imagem.');
+      return false;
     } finally {
       setUploadingImage(false);
     }
   }
 
-  async function handleImageSelection(event: ChangeEvent<HTMLInputElement>) {
+  async function confirmImageSend() {
+    if (!pendingImage || uploadingImage) return;
+    const sent = await uploadImageFile(pendingImage.file);
+    if (sent) setPendingImage(null);
+  }
+
+  function cancelImage() {
+    setPendingImage(null);
+    setImageError(null);
+  }
+
+  function handleImageSelection(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = '';
-    if (file) await uploadImageFile(file);
+    if (file) prepareImage(file);
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
@@ -85,7 +109,7 @@ export default function ChatPanel({
     }
 
     event.preventDefault();
-    void uploadImageFile(file);
+    prepareImage(file);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -177,10 +201,44 @@ export default function ChatPanel({
       <form onSubmit={sendMessage} className="border-t border-surface-border p-3">
         {isHost ? (
           <p className="mb-2 text-[10px] leading-relaxed text-white/40">
-            Anfitrião: <code>.kick @nome</code> · <code>.mute @nome</code> · <code>.unmute @nome</code>
+            Anfitrião: <code>.kick @nome</code> · <code>.mute @nome</code> · <code>.unmute @nome</code> · <code>.promote @nome</code>
           </p>
         ) : (
           <p className="mb-2 text-[10px] text-white/40">A moderação da sala fica com o anfitrião.</p>
+        )}
+        {pendingImage && (
+          <div className="mb-3 rounded-2xl border border-brand-500/35 bg-surface-card p-3">
+            <div className="flex items-start gap-3">
+              <img
+                src={pendingImage.previewUrl}
+                alt="Prévia da imagem que será enviada"
+                className="max-h-32 max-w-[55%] rounded-xl object-contain"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-white">Prévia da imagem</p>
+                <p className="mt-1 break-words text-xs text-white/50">{pendingImage.file.name || 'Imagem colada'}</p>
+                <p className="mt-1 text-[11px] text-white/40">A imagem só será enviada quando você confirmar.</p>
+              </div>
+            </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={cancelImage}
+                disabled={uploadingImage}
+                className="rounded-lg border border-surface-border px-3 py-2 text-xs text-white/75 transition hover:bg-surface-soft disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmImageSend}
+                disabled={uploadingImage}
+                className="rounded-lg bg-gradient-to-br from-brand-500 via-brand-600 to-brand-800 px-3 py-2 text-xs font-semibold text-white transition hover:brightness-110 disabled:opacity-50"
+              >
+                {uploadingImage ? 'Enviando…' : 'Enviar imagem'}
+              </button>
+            </div>
+          </div>
         )}
         <div className="rounded-2xl border border-surface-border bg-surface-card p-2 focus-within:border-brand-500/70">
           <label htmlFor="room-chat-message" className="sr-only">Escreva uma mensagem ou comando</label>
