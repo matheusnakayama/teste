@@ -546,10 +546,11 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       const displayOptions = {
         video: getScreenVideoConstraints(screenShareSettings),
         audio: { restrictOwnAudio: true },
-        // Reexibe a opção de capturar o áudio do sistema ao compartilhar a
-        // tela inteira. O navegador pode não oferecer áudio em toda superfície.
-        systemAudio: 'include',
-        windowAudio: 'window',
+        // Não capture o áudio geral do computador/janelas: ele pode conter o
+        // áudio do Discord e retransmitir as vozes da chamada junto à tela.
+        // Áudio de uma guia do navegador ainda pode ser oferecido pelo browser.
+        systemAudio: 'exclude',
+        windowAudio: 'exclude',
         selfBrowserSurface: 'exclude',
       } as unknown as DisplayMediaStreamOptions;
       const display = await navigator.mediaDevices.getDisplayMedia(displayOptions);
@@ -574,9 +575,17 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       }
       const settings = screenTrack.getSettings();
       const actualCaptureInfo = formatScreenCaptureSettings(settings, screenShareSettings);
-      const displayAudioTrack = display.getAudioTracks()[0] ?? null;
       const displaySurface = (settings as MediaTrackSettings & { displaySurface?: string }).displaySurface;
-      const mayContainCallAudio = displaySurface !== 'browser';
+      const capturedAudioTrack = display.getAudioTracks()[0] ?? null;
+      // Guias podem compartilhar o áudio do próprio conteúdo. Áudio de tela
+      // inteira/janela costuma ser o áudio global, incluindo chamadas de voz;
+      // descarte-o também como proteção caso o navegador ignore as opções acima.
+      const displayAudioTrack = displaySurface === 'browser' ? capturedAudioTrack : null;
+      if (capturedAudioTrack && !displayAudioTrack) {
+        capturedAudioTrack.stop();
+        display.removeTrack(capturedAudioTrack);
+      }
+      const mayContainCallAudio = Boolean(displayAudioTrack && displaySurface !== 'browser');
       const audioSettings = displayAudioTrack?.getSettings() as (MediaTrackSettings & { restrictOwnAudio?: boolean }) | undefined;
       const audioConstraints = navigator.mediaDevices.getSupportedConstraints() as MediaTrackSupportedConstraints & { restrictOwnAudio?: boolean };
       const ownCallAudioIsFiltered = audioConstraints.restrictOwnAudio === true && audioSettings?.restrictOwnAudio !== false;
@@ -617,7 +626,9 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         }
       } else {
         await manager.replaceAudioTrack(cameraStreamRef.current?.getAudioTracks()[0] ?? null).catch(() => {});
-        setBanner('Para compartilhar áudio, escolha uma tela, guia ou janela e marque “Compartilhar áudio” no seletor do navegador. A opção depende do navegador e do sistema operacional.');
+        setBanner(displaySurface === 'browser'
+          ? 'Esta guia não forneceu áudio. A disponibilidade depende do navegador e da guia escolhida.'
+          : 'O áudio da tela/janela foi bloqueado para não retransmitir as vozes do Discord. Para compartilhar áudio de mídia, escolha uma guia do navegador e marque a opção de áudio.');
       }
 
       currentSharingRef.current = true;
