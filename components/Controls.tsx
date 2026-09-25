@@ -106,7 +106,7 @@ export default function Controls({
             value={RESOLUTIONS.indexOf(screenShareSettings.height)}
             disabled={sharingScreen}
             aria-label="Resolução da apresentação, de 480p a 4K"
-            title="Escolha a resolução antes de apresentar. O dispositivo e a conexão podem limitar o resultado."
+            title="Resolução máxima desejada. O envio ajusta o bitrate conforme sua conexão e a quantidade de participantes."
             onChange={(event) => onScreenShareSettingsChange({
               ...screenShareSettings,
               height: RESOLUTIONS[Number(event.target.value)],
@@ -114,6 +114,7 @@ export default function Controls({
             className="mt-1.5 h-1.5 w-full cursor-pointer accent-brand-400 disabled:cursor-not-allowed disabled:opacity-50"
           />
           <span className="mt-0.5 flex justify-between text-[9px] text-white/40"><span>480p</span><span>4K</span></span>
+          <span className="mt-1 block text-[9px] text-white/40">adapta à conexão</span>
         </label>
 
         <label className="w-28 rounded-2xl border border-surface-border bg-surface-card px-3 py-2 text-xs text-white/75 sm:w-36">
@@ -129,7 +130,7 @@ export default function Controls({
             value={FRAME_RATES.indexOf(screenShareSettings.frameRate)}
             disabled={sharingScreen}
             aria-label="Taxa de quadros da apresentação, de 30 a 120 fps"
-            title="Escolha a taxa de quadros antes de apresentar. O dispositivo e a conexão podem limitar o resultado."
+            title="Taxa máxima desejada. O navegador e a conexão podem ajustá-la durante a apresentação."
             onChange={(event) => onScreenShareSettingsChange({
               ...screenShareSettings,
               frameRate: FRAME_RATES[Number(event.target.value)],
@@ -137,6 +138,7 @@ export default function Controls({
             className="mt-1.5 h-1.5 w-full cursor-pointer accent-brand-400 disabled:cursor-not-allowed disabled:opacity-50"
           />
           <span className="mt-0.5 flex justify-between text-[9px] text-white/40"><span>30 fps</span><span>120 fps</span></span>
+          <span className="mt-1 block text-[9px] text-white/40">adapta à conexão</span>
         </label>
       </div>
 
