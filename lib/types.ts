@@ -32,7 +32,7 @@ export interface RoomChatMessage {
   isSystem?: boolean;
 }
 
-export type RoomModerationAction = 'kick' | 'mute' | 'unmute' | 'promote';
+export type RoomModerationAction = 'kick' | 'mute' | 'unmute' | 'promote' | 'epstein';
 
 export interface RoomModerationEvent {
   action: RoomModerationAction;
