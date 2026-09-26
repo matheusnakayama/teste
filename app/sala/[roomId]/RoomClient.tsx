@@ -51,6 +51,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const [focusedPresentationId, setFocusedPresentationId] = useState<string | null>(null);
   const [fatalError, setFatalError] = useState<CallError | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
+  const [pendingPrankPrompt, setPendingPrankPrompt] = useState<{ senderName: string } | null>(null);
 
   const localIdRef = useRef<string>('');
   const localNameRef = useRef<string>('');
@@ -188,9 +189,21 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       channel.bind('client-moderation', (payload: unknown, metadata?: unknown) => {
         const moderation = normalizeModerationEvent(payload);
         if (!moderation || getPusherEventUserId(metadata) !== hostIdRef.current) return;
-        if (moderation.action === 'promote' && !memberJoinTimesRef.current.has(moderation.targetId)) return;
+        if ((moderation.action === 'promote' || moderation.action === 'epstein') && !memberJoinTimesRef.current.has(moderation.targetId)) return;
 
         const targetIsLocal = moderation.targetId === localIdRef.current;
+        if (moderation.action === 'epstein') {
+          if (targetIsLocal) {
+            const senderId = getPusherEventUserId(metadata);
+            setPendingPrankPrompt({
+              senderName: senderId === localIdRef.current
+                ? 'O anfitrião'
+                : participantNamesRef.current.get(senderId ?? '') || 'O anfitrião',
+            });
+          }
+          return;
+        }
+
         const actionText = moderation.action === 'kick'
           ? `${moderation.targetName} foi removido da sala.`
           : moderation.action === 'mute'
@@ -741,13 +754,13 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   }
 
   function handleModerationCommand(text: string): boolean {
-    if (!/^\.(kick|mute|unmute|promote)\b/i.test(text.trim())) return false;
+    if (!/^\.(kick|mute|unmute|promote|epstein)\b/i.test(text.trim())) return false;
     if (hostIdRef.current !== localIdRef.current) {
       showCommandFeedback('Só o anfitrião da sala pode usar comandos de moderação.');
       return true;
     }
 
-    const match = /^\.(kick|mute|unmute|promote)\s+@(.+?)\s*$/i.exec(text.trim());
+    const match = /^\.(kick|mute|unmute|promote|epstein)\s+@(.+?)\s*$/i.exec(text.trim());
     if (!match) {
       showCommandFeedback('Formato do comando: .kick @nome, .mute @nome, .unmute @nome ou .promote @nome.');
       return true;
@@ -771,10 +784,12 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     if (target.id === hostIdRef.current) {
       showCommandFeedback(action === 'promote'
         ? 'Você já é o anfitrião da sala.'
-        : 'O anfitrião não pode remover ou silenciar a própria conta por comando.');
+        : action === 'epstein'
+          ? 'Escolha outra pessoa para a brincadeira.'
+          : 'O anfitrião não pode remover ou silenciar a própria conta por comando.');
       return true;
     }
-    if (action === 'promote' && !memberJoinTimesRef.current.has(target.id)) {
+    if ((action === 'promote' || action === 'epstein') && !memberJoinTimesRef.current.has(target.id)) {
       showCommandFeedback('Essa pessoa já não está conectada à sala. Atualize a lista e tente novamente.');
       return true;
     }
@@ -789,6 +804,10 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     try {
       if (!channel.trigger('client-moderation', moderation)) {
         showCommandFeedback('Não foi possível enviar o comando. Verifique se você ainda está conectado à sala.');
+        return true;
+      }
+      if (action === 'epstein') {
+        setBanner(`Pedido de brincadeira enviado para ${target.name}; os arquivos só serão baixados se a pessoa aceitar.`);
         return true;
       }
       const notice = action === 'kick'
@@ -810,6 +829,24 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   function showCommandFeedback(message: string) {
     setBanner(message);
     appendSystemChatMessage(message);
+  }
+
+  function acceptPrankDownload() {
+    if (!pendingPrankPrompt) return;
+
+    const fileUrl = URL.createObjectURL(new Blob([], { type: 'text/plain;charset=utf-8' }));
+    for (let index = 0; index < 10; index += 1) {
+      const link = document.createElement('a');
+      link.href = fileUrl;
+      link.download = 'eptein.txt';
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+    window.setTimeout(() => URL.revokeObjectURL(fileUrl), 30_000);
+    setPendingPrankPrompt(null);
+    setBanner('Brincadeira aceita: o navegador iniciou o download dos arquivos vazios.');
   }
 
   async function sendChatImage(file: File) {
@@ -947,6 +984,39 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           Sala <span className="font-mono text-white/80">{roomId}</span>
         </div>
       </header>
+
+      {pendingPrankPrompt && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="prank-download-title"
+            className="w-full max-w-sm rounded-2xl border border-surface-border bg-surface-card p-5 text-white shadow-2xl"
+          >
+            <h2 id="prank-download-title" className="text-lg font-semibold">Uma brincadeira da chamada</h2>
+            <p className="mt-2 text-sm leading-relaxed text-white/70">
+              {pendingPrankPrompt.senderName} quer enviar 10 arquivos de texto vazios chamados <code>eptein.txt</code>.
+              Nada será baixado sem sua confirmação.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingPrankPrompt(null)}
+                className="rounded-xl border border-surface-border px-4 py-2 text-sm text-white/75 transition hover:bg-surface-soft"
+              >
+                Recusar
+              </button>
+              <button
+                type="button"
+                onClick={acceptPrankDownload}
+                className="rounded-xl bg-gradient-to-br from-brand-500 via-brand-600 to-brand-800 px-4 py-2 text-sm font-semibold text-white transition hover:brightness-110"
+              >
+                Aceitar download
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {banner && (
         <div className="px-4 pt-3">
@@ -1150,7 +1220,7 @@ function normalizeModerationEvent(payload: unknown): RoomModerationEvent | null 
   if (!payload || typeof payload !== 'object') return null;
   const candidate = payload as Partial<RoomModerationEvent>;
   if (
-    candidate.action !== 'kick' && candidate.action !== 'mute' && candidate.action !== 'unmute' && candidate.action !== 'promote'
+    candidate.action !== 'kick' && candidate.action !== 'mute' && candidate.action !== 'unmute' && candidate.action !== 'promote' && candidate.action !== 'epstein'
   ) return null;
   if (typeof candidate.targetId !== 'string' || candidate.targetId.length > 100) return null;
   return {
