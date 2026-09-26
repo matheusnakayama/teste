@@ -38,6 +38,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const [micLockedByHost, setMicLockedByHost] = useState(false);
   const [camOn, setCamOn] = useState(true);
   const [sharingScreen, setSharingScreen] = useState(false);
+  const [screenAudioAvailable, setScreenAudioAvailable] = useState(false);
+  const [screenAudioEnabled, setScreenAudioEnabled] = useState(false);
   const [screenShareSettings, setScreenShareSettings] = useState<ScreenShareSettings>({ height: 1080, frameRate: 60 });
   const [screenCaptureInfo, setScreenCaptureInfo] = useState('');
   const [muteRemoteAudioDuringShare, setMuteRemoteAudioDuringShare] = useState(false);
@@ -56,6 +58,7 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const participantNamesRef = useRef(new Map<string, string>());
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
+  const screenAudioTrackRef = useRef<MediaStreamTrack | null>(null);
   const screenAudioContextRef = useRef<AudioContext | null>(null);
   const presentationSectionRef = useRef<HTMLElement | null>(null);
   const chatOpenRef = useRef(false);
@@ -66,6 +69,8 @@ export default function RoomClient({ roomId }: { roomId: string }) {
   const channelRef = useRef<Channel | null>(null);
   const camBeforeShareRef = useRef(true);
   const screenShareOperationRef = useRef(false);
+  const screenAudioEnabledRef = useRef(false);
+  const muteRemoteAudioFallbackRef = useRef(false);
 
   const inviteLink = useMemo(() => {
     if (typeof window === 'undefined') return '';
@@ -84,6 +89,9 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     screenAudioContextRef.current = null;
     cameraStreamRef.current = null;
     screenStreamRef.current = null;
+    screenAudioTrackRef.current = null;
+    screenAudioEnabledRef.current = false;
+    muteRemoteAudioFallbackRef.current = false;
     roomSessionRef.current = '';
     localIdRef.current = '';
     disconnectPusher();
@@ -406,8 +414,12 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         // Silencia toda a faixa enviada, incluindo áudio de tela que estivesse
         // misturado ao microfone, e não só o microfone físico.
         await manager?.replaceAudioTrack(null);
-      } else if (currentSharingRef.current && screenStreamRef.current?.getAudioTracks()[0]) {
-        await setOutgoingScreenAudio(screenStreamRef.current.getAudioTracks()[0]);
+      } else if (
+        currentSharingRef.current &&
+        screenAudioEnabledRef.current &&
+        screenAudioTrackRef.current?.readyState === 'live'
+      ) {
+        await setOutgoingScreenAudio(screenAudioTrackRef.current);
       } else {
         await setOutgoingScreenAudio(null);
       }
@@ -427,6 +439,13 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     if (!manager) return false;
 
     const micTrack = cameraStreamRef.current?.getAudioTracks()[0] ?? null;
+    if (micLockedByHostRef.current) {
+      await manager.replaceAudioTrack(null);
+      const previousContext = screenAudioContextRef.current;
+      screenAudioContextRef.current = null;
+      await previousContext?.close().catch(() => {});
+      return false;
+    }
     if (!screenAudioTrack) {
       await manager.replaceAudioTrack(micTrack);
       const previousContext = screenAudioContextRef.current;
@@ -457,6 +476,25 @@ export default function RoomClient({ roomId }: { roomId: string }) {
     screenAudioContextRef.current = audioContext;
     await previousContext?.close().catch(() => {});
     return !!mixedTrack;
+  }
+
+  async function toggleSharedScreenAudio() {
+    const screenAudioTrack = screenAudioTrackRef.current;
+    if (!screenAudioTrack || screenAudioTrack.readyState !== 'live' || micLockedByHostRef.current) return;
+
+    const nextEnabled = !screenAudioEnabledRef.current;
+    try {
+      await setOutgoingScreenAudio(nextEnabled ? screenAudioTrack : null);
+      screenAudioEnabledRef.current = nextEnabled;
+      setScreenAudioEnabled(nextEnabled);
+      setMuteRemoteAudioDuringShare(nextEnabled && muteRemoteAudioFallbackRef.current);
+      setBanner(nextEnabled
+        ? 'Áudio da tela transmitido. Ele pode incluir as vozes e sons de outros aplicativos; desligue “Áudio da tela” para evitar isso.'
+        : 'Áudio da tela silenciado. Seu microfone continua ativo.');
+    } catch (error) {
+      console.error('Não foi possível alterar o áudio compartilhado da tela:', error);
+      setBanner('Não foi possível alterar o áudio da tela. Tente novamente.');
+    }
   }
 
   function toggleMic() {
@@ -497,6 +535,11 @@ export default function RoomClient({ roomId }: { roomId: string }) {
 
     const display = screenStreamRef.current;
     screenStreamRef.current = null;
+    screenAudioTrackRef.current = null;
+    screenAudioEnabledRef.current = false;
+    muteRemoteAudioFallbackRef.current = false;
+    setScreenAudioAvailable(false);
+    setScreenAudioEnabled(false);
 
     const camTrack = cameraStreamRef.current?.getVideoTracks()[0] ?? null;
     const restoreCam = camBeforeShareRef.current;
@@ -546,11 +589,10 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       const displayOptions = {
         video: getScreenVideoConstraints(screenShareSettings),
         audio: { restrictOwnAudio: true },
-        // Não capture o áudio geral do computador/janelas: ele pode conter o
-        // áudio do Discord e retransmitir as vozes da chamada junto à tela.
-        // Áudio de uma guia do navegador ainda pode ser oferecido pelo browser.
-        systemAudio: 'exclude',
-        windowAudio: 'exclude',
+        // Mantém o seletor nativo de áudio da tela/janela. O áudio começa
+        // desligado no app e pode ser ativado pelo apresentador quando quiser.
+        systemAudio: 'include',
+        windowAudio: 'window',
         selfBrowserSurface: 'exclude',
       } as unknown as DisplayMediaStreamOptions;
       const display = await navigator.mediaDevices.getDisplayMedia(displayOptions);
@@ -576,26 +618,28 @@ export default function RoomClient({ roomId }: { roomId: string }) {
       const settings = screenTrack.getSettings();
       const actualCaptureInfo = formatScreenCaptureSettings(settings, screenShareSettings);
       const displaySurface = (settings as MediaTrackSettings & { displaySurface?: string }).displaySurface;
-      const capturedAudioTrack = display.getAudioTracks()[0] ?? null;
-      // Guias podem compartilhar o áudio do próprio conteúdo. Áudio de tela
-      // inteira/janela costuma ser o áudio global, incluindo chamadas de voz;
-      // descarte-o também como proteção caso o navegador ignore as opções acima.
-      const displayAudioTrack = displaySurface === 'browser' ? capturedAudioTrack : null;
-      if (capturedAudioTrack && !displayAudioTrack) {
-        capturedAudioTrack.stop();
-        display.removeTrack(capturedAudioTrack);
-      }
+      const displayAudioTrack = display.getAudioTracks()[0] ?? null;
+      screenAudioTrackRef.current = displayAudioTrack;
+      screenAudioEnabledRef.current = false;
+      setScreenAudioEnabled(false);
+      setScreenAudioAvailable(Boolean(displayAudioTrack));
       const mayContainCallAudio = Boolean(displayAudioTrack && displaySurface !== 'browser');
       const audioSettings = displayAudioTrack?.getSettings() as (MediaTrackSettings & { restrictOwnAudio?: boolean }) | undefined;
       const audioConstraints = navigator.mediaDevices.getSupportedConstraints() as MediaTrackSupportedConstraints & { restrictOwnAudio?: boolean };
       const ownCallAudioIsFiltered = audioConstraints.restrictOwnAudio === true && audioSettings?.restrictOwnAudio !== false;
       const useLocalMuteFallback = Boolean(displayAudioTrack && mayContainCallAudio && !ownCallAudioIsFiltered);
-      setMuteRemoteAudioDuringShare(useLocalMuteFallback);
+      muteRemoteAudioFallbackRef.current = useLocalMuteFallback;
+      setMuteRemoteAudioDuringShare(false);
 
       try {
         await manager.replaceVideoTrack(screenTrack, display, profile);
       } catch (err) {
         console.error('Não foi possível enviar o compartilhamento de tela:', err);
+        screenAudioTrackRef.current = null;
+        screenAudioEnabledRef.current = false;
+        muteRemoteAudioFallbackRef.current = false;
+        setScreenAudioAvailable(false);
+        setScreenAudioEnabled(false);
         display.getTracks().forEach((track) => track.stop());
         screenStreamRef.current = null;
         setMuteRemoteAudioDuringShare(false);
@@ -610,25 +654,16 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         return;
       }
 
-      if (displayAudioTrack) {
-        try {
-          await setOutgoingScreenAudio(displayAudioTrack);
-          setBanner(
-            useLocalMuteFallback
-              ? 'Para evitar retorno de voz, o áudio dos participantes ficará silenciado para você enquanto esta apresentação estiver ativa.'
-              : null
-          );
-        } catch (err) {
-          console.error('Não foi possível misturar o áudio compartilhado:', err);
-          await setOutgoingScreenAudio(null).catch(() => {});
-          setMuteRemoteAudioDuringShare(false);
-          setBanner('A tela será compartilhada, mas o áudio capturado não pôde ser enviado.');
-        }
-      } else {
-        await manager.replaceAudioTrack(cameraStreamRef.current?.getAudioTracks()[0] ?? null).catch(() => {});
-        setBanner(displaySurface === 'browser'
-          ? 'Esta guia não forneceu áudio. A disponibilidade depende do navegador e da guia escolhida.'
-          : 'O áudio da tela/janela foi bloqueado para não retransmitir as vozes do Discord. Para compartilhar áudio de mídia, escolha uma guia do navegador e marque a opção de áudio.');
+      try {
+        // Mantém o microfone ativo, mas deixa o áudio capturado da tela
+        // desligado até o apresentador ativá-lo no controle da chamada.
+        await setOutgoingScreenAudio(null);
+        setBanner(displayAudioTrack
+          ? 'A tela foi iniciada com o áudio capturado desligado. Use “Áudio da tela” para ativá-lo; ele pode incluir sons de outros aplicativos, como o Discord.'
+          : 'A tela está sendo compartilhada sem áudio. Para habilitar o controle de áudio, marque “Compartilhar áudio” no seletor do navegador.');
+      } catch (err) {
+        console.error('Não foi possível preparar o áudio da apresentação:', err);
+        setBanner('A tela será compartilhada, mas não foi possível preparar o áudio.');
       }
 
       currentSharingRef.current = true;
@@ -645,8 +680,23 @@ export default function RoomClient({ roomId }: { roomId: string }) {
         // capturado pela função de clique anterior.
         void stopScreenShare();
       }, { once: true });
+      displayAudioTrack?.addEventListener('ended', () => {
+        if (screenAudioTrackRef.current?.id !== displayAudioTrack.id) return;
+        screenAudioTrackRef.current = null;
+        screenAudioEnabledRef.current = false;
+        setScreenAudioAvailable(false);
+        setScreenAudioEnabled(false);
+        setMuteRemoteAudioDuringShare(false);
+        void setOutgoingScreenAudio(null).catch(() => {});
+        setBanner('O navegador encerrou o áudio compartilhado; seu microfone continua ativo.');
+      }, { once: true });
     } catch (err) {
       console.error('Não foi possível iniciar a apresentação de tela:', err);
+      screenAudioTrackRef.current = null;
+      screenAudioEnabledRef.current = false;
+      muteRemoteAudioFallbackRef.current = false;
+      setScreenAudioAvailable(false);
+      setScreenAudioEnabled(false);
       setMuteRemoteAudioDuringShare(false);
       setScreenCaptureInfo('');
       setBanner('Não foi possível compartilhar a tela. Verifique as permissões do navegador.');
@@ -947,12 +997,15 @@ export default function RoomClient({ roomId }: { roomId: string }) {
           micOn={micOn}
           camOn={camOn}
           sharingScreen={sharingScreen}
+          screenAudioAvailable={screenAudioAvailable}
+          screenAudioEnabled={screenAudioEnabled}
           screenShareSettings={screenShareSettings}
           onScreenShareSettingsChange={setScreenShareSettings}
           participantCount={participantList.length}
           onToggleMic={toggleMic}
           onToggleCam={toggleCam}
           onToggleScreenShare={toggleScreenShare}
+          onToggleScreenAudio={toggleSharedScreenAudio}
           onLeave={handleLeave}
           onCopyLink={handleCopyLink}
           onToggleParticipants={toggleParticipantsPanel}
